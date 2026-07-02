@@ -654,7 +654,6 @@ export default function ListingDetailPage() {
               photos={photosWithOverrides}
               onSelectPhoto={(id) => setOpenPhotoId(id)}
               onLabelRoom={handleLabelRoom}
-              onApplySuggestion={handleApplySuggestionForPhoto}
               onCustomEdit={handleCustomEditForPhoto}
               toolJobs={toolJobs}
               onAcceptJob={(jobId) => handleReviewJob(jobId, 'accept')}

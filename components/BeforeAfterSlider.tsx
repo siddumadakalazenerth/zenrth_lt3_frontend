@@ -74,8 +74,10 @@ export function BeforeAfterSlider({
       onTouchStart={(e) => { dragging.current = true; onManualDrag?.(); update(e.touches[0].clientX); }}
       onTouchMove={(e) => { e.preventDefault(); if (dragging.current) update(e.touches[0].clientX); }}
     >
-      {/* After image (base layer) — prioritized since this is now the default view */}
-      <Image src={afterUrl} alt={afterLabel} fill unoptimized priority className="object-cover" onLoad={onAfterLoad} />
+      {/* After image (base layer) — prioritized since this is now the default view.
+          object-contain (not cover) so the full generated image shows at its actual
+          proportions instead of being cropped/zoomed to fill the container. */}
+      <Image src={afterUrl} alt={afterLabel} fill unoptimized priority className="object-contain" onLoad={onAfterLoad} />
       <span className="absolute bottom-2 right-2 rounded-full bg-black/60 px-2 py-0.5 text-[10px] text-white font-semibold backdrop-blur-sm pointer-events-none">
         {afterLabel}
       </span>
@@ -85,7 +87,7 @@ export function BeforeAfterSlider({
         className="absolute inset-0"
         style={{ clipPath: `inset(0 ${100 - position}% 0 0)` }}
       >
-        <Image src={beforeUrl} alt={beforeLabel} fill unoptimized className="object-cover" onLoad={onBeforeLoad} />
+        <Image src={beforeUrl} alt={beforeLabel} fill unoptimized className="object-contain" onLoad={onBeforeLoad} />
         <span className="absolute bottom-2 left-2 rounded-full bg-black/60 px-2 py-0.5 text-[10px] text-white font-semibold backdrop-blur-sm pointer-events-none">
           {beforeLabel}
         </span>

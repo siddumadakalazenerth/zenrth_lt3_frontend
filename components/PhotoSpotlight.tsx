@@ -5,7 +5,7 @@ import Image from 'next/image';
 import type { LucideIcon } from 'lucide-react';
 import {
   ChevronLeft, ChevronRight, Wand2, Pencil, Check, X,
-  RefreshCw, Brush, List, Sparkles, Sofa,
+  RefreshCw, Sparkles, Sofa,
   Armchair, Coffee, Tv, LampFloor, Lamp, LampDesk,
   Library, Flower2, Frame, Shirt, BedDouble, BedSingle,
   Bath, ShowerHead, Monitor, Utensils, Umbrella, Car, Wrench,
@@ -78,73 +78,13 @@ const DEFURNISHING_ITEMS = [
   { id: 'frame',    icon: 'Frame',      label: 'Wall Art'     },
 ];
 
-const COLOR_PALETTE = [
-  { label: 'White',       hex: '#F8F8F6' },
-  { label: 'Cream',       hex: '#FAF0E6' },
-  { label: 'Beige',       hex: '#D4B896' },
-  { label: 'Warm Gray',   hex: '#9E9A90' },
-  { label: 'Charcoal',    hex: '#4A4A4A' },
-  { label: 'Navy',        hex: '#1B2A4A' },
-  { label: 'Sage',        hex: '#8B9E73' },
-  { label: 'Forest',      hex: '#2D5016' },
-  { label: 'Terra Cotta', hex: '#C4622D' },
-  { label: 'Dusty Rose',  hex: '#C9A9A6' },
-  { label: 'Gold',        hex: '#C9A84C' },
-  { label: 'Teal',        hex: '#0E7C7B' },
-  { label: 'Blush',       hex: '#F2C4CE' },
-  { label: 'Olive',       hex: '#6B6B27' },
-  { label: 'Slate',       hex: '#5A7A8C' },
-  { label: 'Sand',        hex: '#C2B280' },
-  { label: 'Rust',        hex: '#8B3A0F' },
-  { label: 'Mint',        hex: '#98D8C8' },
-];
-
-function getDetectedObjects(photo: Photo, planData: Record<string, unknown> | null): string[] {
-  const objects = new Set<string>();
-
-  if (planData && Array.isArray(planData.pieces)) {
-    (planData.pieces as Record<string, unknown>[]).forEach(p => {
-      if (p.item) objects.add(String(p.item));
-    });
-  }
-
-  const preserve = photo.analysis?.recommendation?.preserve;
-  if (Array.isArray(preserve)) {
-    (preserve as string[]).forEach(o => { if (o) objects.add(o); });
-  }
-
-  const room = (photo.analysis?.roomType ?? '').toLowerCase();
-  const roomDefaults: Record<string, string[]> = {
-    bedroom:  ['Bed', 'Wardrobe', 'Nightstand', 'Dresser', 'Curtains', 'Rug', 'Mirror', 'Lighting'],
-    living:   ['Sofa', 'Coffee Table', 'TV Unit', 'Bookshelf', 'Armchair', 'Rug', 'Curtains', 'Lighting'],
-    kitchen:  ['Cabinets', 'Countertop', 'Sink', 'Appliances', 'Backsplash', 'Flooring', 'Island'],
-    bathroom: ['Vanity', 'Mirror', 'Shower', 'Bathtub', 'Tiles', 'Towel Rail', 'Sink', 'Lighting'],
-    dining:   ['Dining Table', 'Chairs', 'Chandelier', 'Sideboard', 'Rug', 'Curtains'],
-    balcony:  ['Outdoor Furniture', 'Planters', 'Railing', 'Flooring', 'Lighting'],
-    hallway:  ['Shoe Cabinet', 'Mirror', 'Coat Rack', 'Flooring', 'Lighting'],
-    garage:   ['Storage Shelves', 'Flooring', 'Lighting', 'Workbench'],
-    exterior: ['Garden Furniture', 'Plants', 'Pathway', 'Lighting', 'Fencing'],
-  };
-
-  for (const [key, items] of Object.entries(roomDefaults)) {
-    if (room.includes(key)) { items.forEach(o => objects.add(o)); break; }
-  }
-
-  if (objects.size === 0) {
-    ['Furniture', 'Flooring', 'Wall Color', 'Lighting', 'Windows', 'Curtains'].forEach(o => objects.add(o));
-  }
-
-  return Array.from(objects);
-}
-
 interface PhotoSpotlightProps {
   photos: Photo[];
   onSelectPhoto: (photoId: string) => void;
   onLabelRoom: (photoId: string, roomType: string) => Promise<void>;
-  onApplySuggestion: (photoId: string, prompt: string) => Promise<void>;
-  // Freeform "Edit Image" instructions (object swaps, etc.) — routes to the
-  // custom_edit tool instead of whichever guided-action tool the photo happens
-  // to already have, since that tool may not allow the requested change.
+  // Freeform "regenerate with changes" instructions on an already-staged/generated
+  // image — routes to the custom_edit tool instead of whichever guided-action tool
+  // the photo happens to already have, since that tool may not allow the requested change.
   onCustomEdit?: (photoId: string, prompt: string, sourceJobId?: string) => Promise<void>;
   toolJobs?: ToolJob[];
   onAcceptJob?: (jobId: string) => Promise<void>;
@@ -164,7 +104,6 @@ export function PhotoSpotlight({
   photos,
   onSelectPhoto,
   onLabelRoom,
-  onApplySuggestion,
   onCustomEdit,
   toolJobs,
   onAcceptJob,
@@ -182,8 +121,6 @@ export function PhotoSpotlight({
   // "position 1" could silently start pointing at a different photo without any
   // per-photo state (toggle buttons, slider mode, etc.) resetting to match.
   const [selectedPhotoId, setSelectedPhotoId] = useState<string | null>(photos[0]?._id ?? null);
-  const [selectedColors, setSelectedColors] = useState<string[]>([]);
-  const [customColor, setCustomColor]   = useState('');
   const [customRoom, setCustomRoom]     = useState('');
   const [labelingBusy, setLabelingBusy] = useState(false);
   const [applyBusy, setApplyBusy]       = useState(false);
@@ -197,15 +134,6 @@ export function PhotoSpotlight({
   const [lastGoodSrc, setLastGoodSrc]   = useState<string | null>(null);
 
 
-  // Image edit panel (top-right "Edit Image" button)
-  const [showImageEdit, setShowImageEdit]         = useState(false);
-  const [imageEditTab, setImageEditTab]           = useState<'objects' | 'canvas'>('objects');
-  const [selectedObjects, setSelectedObjects]     = useState<string[]>([]);
-  const [objectPrompt, setObjectPrompt]           = useState('');
-  const [feasibility, setFeasibility]             = useState<null | 'checking' | 'ready'>(null);
-  const [canvasPrompt, setCanvasPrompt]           = useState('');
-  const [canvasHasDrawing, setCanvasHasDrawing]   = useState(false);
-  const [imageEditBusy, setImageEditBusy]         = useState(false);
 
   // Image suggestion review — "Edit" panel (text instruction) + Regenerate flow
   const [showImageRegenPanel, setShowImageRegenPanel] = useState(false);
@@ -259,11 +187,9 @@ export function PhotoSpotlight({
   const [acceptedViewMode, setAcceptedViewMode] = useState<'original' | 'generated'>('generated');
 
   const imageContainerRef      = useRef<HTMLDivElement>(null);
-  const canvasRef              = useRef<HTMLCanvasElement>(null);
-  const isDrawingRef           = useRef(false);
-  const lastPointRef           = useRef<{ x: number; y: number } | null>(null);
   const autoAcceptNextPlanRef  = useRef(false);
   const thumbStripRef          = useRef<HTMLDivElement>(null);
+  const thumbSnapTimeoutRef    = useRef<number | null>(null);
 
   const idIndex       = photos.findIndex(p => p._id === selectedPhotoId);
   const clampedIndex  = idIndex >= 0 ? idIndex : 0;
@@ -294,14 +220,7 @@ export function PhotoSpotlight({
 
   // Reset all per-photo state when the photo changes
   useEffect(() => {
-    setSelectedColors([]);
     setCustomRoom('');
-    setShowImageEdit(false);
-    setSelectedObjects([]);
-    setObjectPrompt('');
-    setCanvasPrompt('');
-    setCanvasHasDrawing(false);
-    setFeasibility(null);
     setShowImageRegenPanel(false);
     setImageRegenPrompt('');
     setImageRegenLoading(false);
@@ -328,10 +247,21 @@ export function PhotoSpotlight({
   }, [photo?._id]);
 
   // Auto-accept every plan job immediately — no plan panel is shown to the user.
+  // Accepting a furnishing plan also kicks off the actual image-render job on the
+  // backend (see reviewToolJob) — if THAT step throws, the plan job never flips out
+  // of ready_for_review, so this effect's dependency never changes and never retries.
+  // Without error handling here, that failure was completely silent: no image, no
+  // error message, and the "Generating..." overlay spun forever.
   useEffect(() => {
     if (_jobHasPlan && _activeJob && onAcceptJob) {
       autoAcceptNextPlanRef.current = false;
-      void onAcceptJob(_activeJob._id);
+      const jobId = _activeJob._id;
+      onAcceptJob(jobId).catch((err) => {
+        setJobErrorMessage(err instanceof Error ? err.message : 'Could not generate the staged image. Please try again.');
+        setFurniturePickerBusy(false);
+        setApplyBusy(false);
+        setStagingItems([]);
+      });
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [_jobHasPlan]);
@@ -375,7 +305,6 @@ export function PhotoSpotlight({
       setApplyBusy(false);
       setEnhanceBusy(false);
       setJobBusy(false);
-      setImageEditBusy(false);
       setStagingItems([]);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -481,24 +410,6 @@ export function PhotoSpotlight({
     return () => { cancelled = true; };
   }, [isDefurnishing]);
 
-  // Init canvas dimensions when switching to the canvas tab
-  useEffect(() => {
-    if (showImageEdit && imageEditTab === 'canvas') {
-      const t = setTimeout(() => {
-        const canvas    = canvasRef.current;
-        const container = imageContainerRef.current;
-        if (!canvas || !container) return;
-        const rect = container.getBoundingClientRect();
-        canvas.width  = rect.width;
-        canvas.height = rect.height;
-        const ctx = canvas.getContext('2d');
-        if (ctx) ctx.clearRect(0, 0, canvas.width, canvas.height);
-        setCanvasHasDrawing(false);
-      }, 80);
-      return () => clearTimeout(t);
-    }
-  }, [showImageEdit, imageEditTab]);
-
   const prev = useCallback(() => {
     const i = Math.max(0, clampedIndex - 1);
     setSelectedPhotoId(photos[i]?._id ?? null);
@@ -512,11 +423,43 @@ export function PhotoSpotlight({
   // horizontally, instead of only responding to shift-scroll or a horizontal
   // trackpad swipe. Only hijacks the wheel when the strip actually has somewhere
   // to scroll — otherwise vertical page scrolling over it behaves normally.
-  function handleThumbStripWheel(e: React.WheelEvent<HTMLDivElement>) {
+  //
+  // Attached as a native listener rather than JSX's onWheel: React always registers
+  // onWheel as passive, so calling preventDefault() inside it silently fails (logs
+  // "Unable to preventDefault inside passive event listener invocation") — the page
+  // would keep scrolling vertically underneath the horizontal scroll at the same time.
+  // { passive: false } here is the only way to actually stop that.
+  useEffect(() => {
     const el = thumbStripRef.current;
-    if (!el || el.scrollWidth <= el.clientWidth) return;
-    e.preventDefault();
-    el.scrollLeft += e.deltaY + e.deltaX;
+    if (!el) return;
+    function onWheel(e: WheelEvent) {
+      if (el!.scrollWidth <= el!.clientWidth) return;
+      e.preventDefault();
+      el!.scrollLeft += e.deltaY + e.deltaX;
+    }
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, []);
+
+  const THUMB_SNAP_STEP = 120; // 112px thumb width + 8px gap
+
+  // Once scrolling (wheel, trackpad, or scrollbar drag) pauses, settle on the nearest
+  // item boundary instead of resting wherever the gesture happened to stop — otherwise
+  // a thumbnail is often left showing partially clipped right before the upload button.
+  // Plain CSS scroll-snap can't be used here: it fights the wheel handler above (a
+  // `scroll-snap-type` axis blocks/reverts the repeated small `scrollLeft +=`
+  // increments a synthetic wheel-to-horizontal conversion relies on), so this settles
+  // the position manually via a debounce instead.
+  function handleThumbStripScroll() {
+    const el = thumbStripRef.current;
+    if (!el) return;
+    if (thumbSnapTimeoutRef.current) window.clearTimeout(thumbSnapTimeoutRef.current);
+    thumbSnapTimeoutRef.current = window.setTimeout(() => {
+      const maxScroll = el.scrollWidth - el.clientWidth;
+      const nearest = Math.round(el.scrollLeft / THUMB_SNAP_STEP) * THUMB_SNAP_STEP;
+      const clamped = Math.max(0, Math.min(nearest, maxScroll));
+      if (Math.abs(clamped - el.scrollLeft) > 1) el.scrollTo({ left: clamped, behavior: 'smooth' });
+    }, 120);
   }
 
   if (!photo || photos.length === 0) return null;
@@ -551,7 +494,7 @@ export function PhotoSpotlight({
   // True while any full-screen loading overlay (enhance/defurnish/stage/regenerate) is
   // covering the image. These states start on click, before jobRunning goes true (which
   // only flips once the backend confirms the job) — so the room label chip and the
-  // Enhance/Furniture/Edit Image toolbar, which only checked !jobRunning, stayed
+  // Enhance/Furniture/Defurnish toolbar, which only checked !jobRunning, stayed
   // rendered underneath the semi-transparent overlay during that gap and showed through.
   const anyOverlayActive = isEnhancing || isDefurnishing || furniturePickerBusy || imageRegenLoading;
 
@@ -564,24 +507,10 @@ export function PhotoSpotlight({
     : resolvePhotoUrl(photo.url, photo.imageUpdatedAt || photo.updatedAt);
   const mainImageLoading = !jobHasImage && lastGoodSrc !== mainImageSrc;
 
-  const detectedObjects = getDetectedObjects(photo, (activeJob?.resultData as Record<string, unknown>) ?? null);
-
-  function toggleColor(hex: string) {
-    setSelectedColors(prev => {
-      if (prev.includes(hex)) return prev.filter(c => c !== hex);
-      if (prev.length >= 3)   return [prev[1], prev[2], hex];
-      return [...prev, hex];
-    });
-  }
-
   // Try to apply a simple edit instruction directly to the plan without calling AI.
   function buildSuggestionPrompt(extra?: string): string {
     const parts: string[] = [];
     if (photo.analysis?.roomType) parts.push(`Room: ${photo.analysis.roomType}`);
-    if (selectedColors.length > 0) {
-      const labels = selectedColors.map(h => COLOR_PALETTE.find(c => c.hex === h)?.label ?? h);
-      parts.push(`Preferred colors: ${labels.join(', ')}`);
-    }
     if (extra) parts.push(extra);
     return parts.join('. ');
   }
@@ -643,16 +572,31 @@ export function PhotoSpotlight({
     const parts: string[] = [];
     if (pickerStyle)          parts.push(`Style: ${pickerStyle}`);
     if (furniture.length > 0) parts.push(`Furniture: ${furniture.join(', ')}`);
-    try { await onTriggerStaging(photo._id, buildSuggestionPrompt(parts.join('. '))); }
-    finally { setApplyBusy(false); }
+    try {
+      await onTriggerStaging(photo._id, buildSuggestionPrompt(parts.join('. ')));
+    } catch (err) {
+      // A failure here means no ToolJob was ever created (e.g. the initial request
+      // itself failed), so there's nothing for the "job failed" effect to catch —
+      // without clearing furniturePickerBusy here too, the full-screen "Staging..."
+      // overlay would spin forever with no explanation.
+      setJobErrorMessage(err instanceof Error ? err.message : 'Could not start furnishing. Please try again.');
+      setFurniturePickerBusy(false);
+      setStagingItems([]);
+    } finally {
+      setApplyBusy(false);
+    }
   }
 
   async function handleDefurnish() {
     if (!onTriggerDefurnishing) return;
     setJobErrorMessage(null);
     setIsDefurnishing(true);
-    try { await onTriggerDefurnishing(photo._id); }
-    catch { setIsDefurnishing(false); }
+    try {
+      await onTriggerDefurnishing(photo._id);
+    } catch (err) {
+      setJobErrorMessage(err instanceof Error ? err.message : 'Could not start defurnishing. Please try again.');
+      setIsDefurnishing(false);
+    }
   }
 
   function handleFurnitureClick(mode: 'furnish' | 'defurnish') {
@@ -679,8 +623,17 @@ export function PhotoSpotlight({
     setJobErrorMessage(null);
     setEnhanceBusy(true);
     setIsEnhancing(true);
-    try { await onTriggerEnhancement(photo._id); }
-    finally { setEnhanceBusy(false); }
+    try {
+      await onTriggerEnhancement(photo._id);
+    } catch (err) {
+      // No ToolJob exists yet if the initial request itself failed, so the
+      // "job failed" effect has nothing to catch — clear isEnhancing here too,
+      // otherwise the full-screen "Enhancing..." overlay spins forever.
+      setJobErrorMessage(err instanceof Error ? err.message : 'Could not start enhancement. Please try again.');
+      setIsEnhancing(false);
+    } finally {
+      setEnhanceBusy(false);
+    }
   }
 
   async function handleAcceptJob() {
@@ -748,106 +701,6 @@ export function PhotoSpotlight({
     }
   }
 
-  async function handleImageEditSubmit() {
-    let prompt = '';
-    if (imageEditTab === 'objects' && selectedObjects.length > 0) {
-      prompt = `Replace or modify: ${selectedObjects.join(', ')}. ${objectPrompt}`.trim();
-    } else if (imageEditTab === 'canvas' && canvasHasDrawing) {
-      prompt = `Edit the highlighted/drawn area in the image. ${canvasPrompt}`.trim();
-    }
-    if (!prompt) return;
-    setJobErrorMessage(null);
-    setImageEditBusy(true);
-    setShowImageEdit(false);
-    try {
-      if (onCustomEdit) {
-        await onCustomEdit(photo._id, prompt);
-      } else {
-        // Fallback for any caller that hasn't wired up onCustomEdit yet — note this
-        // routes through whatever tool the photo's existing guidance points to, which
-        // may not actually support the requested change (e.g. swapping in a new object).
-        await onApplySuggestion(photo._id, buildSuggestionPrompt(prompt));
-      }
-      setSelectedObjects([]);
-      setObjectPrompt('');
-      setCanvasPrompt('');
-      setCanvasHasDrawing(false);
-      setFeasibility(null);
-    } finally { setImageEditBusy(false); }
-  }
-
-  async function handleCheckFeasibility() {
-    setFeasibility('checking');
-    await new Promise(r => setTimeout(r, 900));
-    setFeasibility('ready');
-  }
-
-  // ── Canvas drawing helpers ──
-  function getCanvasPoint(e: React.MouseEvent | React.TouchEvent): { x: number; y: number } {
-    const canvas = canvasRef.current!;
-    const rect   = canvas.getBoundingClientRect();
-    const sx = canvas.width  / rect.width;
-    const sy = canvas.height / rect.height;
-    if ('touches' in e) {
-      return { x: (e.touches[0].clientX - rect.left) * sx, y: (e.touches[0].clientY - rect.top) * sy };
-    }
-    const me = e as React.MouseEvent;
-    return { x: (me.clientX - rect.left) * sx, y: (me.clientY - rect.top) * sy };
-  }
-
-  function paintLine(from: { x: number; y: number }, to: { x: number; y: number }) {
-    const ctx = canvasRef.current?.getContext('2d');
-    if (!ctx) return;
-    ctx.globalCompositeOperation = 'source-over';
-    ctx.strokeStyle = 'rgba(255, 215, 30, 0.52)';
-    ctx.lineWidth   = 32;
-    ctx.lineCap     = 'round';
-    ctx.lineJoin    = 'round';
-    ctx.beginPath();
-    ctx.moveTo(from.x, from.y);
-    ctx.lineTo(to.x,   to.y);
-    ctx.stroke();
-    setCanvasHasDrawing(true);
-  }
-
-  function clearCanvas() {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    if (ctx) ctx.clearRect(0, 0, canvas.width, canvas.height);
-    setCanvasHasDrawing(false);
-  }
-
-  function onCanvasDown(e: React.MouseEvent<HTMLCanvasElement>) {
-    isDrawingRef.current  = true;
-    const pt = getCanvasPoint(e);
-    lastPointRef.current  = pt;
-    paintLine(pt, pt);
-  }
-  function onCanvasMove(e: React.MouseEvent<HTMLCanvasElement>) {
-    if (!isDrawingRef.current) return;
-    const pt = getCanvasPoint(e);
-    if (lastPointRef.current) paintLine(lastPointRef.current, pt);
-    lastPointRef.current = pt;
-  }
-  function onCanvasUp() { isDrawingRef.current = false; lastPointRef.current = null; }
-
-  function onCanvasTouchStart(e: React.TouchEvent<HTMLCanvasElement>) {
-    e.preventDefault();
-    isDrawingRef.current = true;
-    const pt = getCanvasPoint(e);
-    lastPointRef.current = pt;
-    paintLine(pt, pt);
-  }
-  function onCanvasTouchMove(e: React.TouchEvent<HTMLCanvasElement>) {
-    e.preventDefault();
-    if (!isDrawingRef.current) return;
-    const pt = getCanvasPoint(e);
-    if (lastPointRef.current) paintLine(lastPointRef.current, pt);
-    lastPointRef.current = pt;
-  }
-  function onCanvasTouchEnd() { isDrawingRef.current = false; lastPointRef.current = null; }
-
   // ─────────────────────────────────────────────────────────
   //  RENDER
   // ─────────────────────────────────────────────────────────
@@ -909,7 +762,7 @@ export function PhotoSpotlight({
               toggle) — the backdrop behind this is the previous frame, which on its
               own can read as "still blurry" with no indication anything is happening.
               This makes clear a fresh (often multi-MB) image is actively loading. ── */}
-        {mainImageLoading && !isPending && !jobRunning && !showImageEdit && (
+        {mainImageLoading && !isPending && !jobRunning && (
           <div className="absolute inset-0 z-10 flex items-center justify-center bg-black/35">
             <span className="flex items-center gap-2 rounded-full bg-black/60 px-3 py-1.5 text-xs font-semibold text-white backdrop-blur-sm">
               <span className="h-3.5 w-3.5 rounded-full border-2 border-white border-t-transparent animate-spin" />
@@ -921,7 +774,7 @@ export function PhotoSpotlight({
         {/* ── Persistent "Switch to Original / Switch to Generated" — shown any time this
               photo has an accepted edit on record (photo.originalUrl exists), even long
               after the review job itself is gone. Lets the seller re-compare at any time. ── */}
-        {!jobHasImage && !needsAttention && !isPending && !jobRunning && !showImageEdit && (photo.acceptedFixes?.length ?? 0) > 0 && (
+        {!jobHasImage && !needsAttention && !isPending && !jobRunning && (photo.acceptedFixes?.length ?? 0) > 0 && (
           <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-10 flex items-center gap-1.5 rounded-full bg-black/55 border border-white/20 p-1 backdrop-blur-sm shadow-lg">
             <button
               onClick={() => setAcceptedViewMode('original')}
@@ -947,22 +800,6 @@ export function PhotoSpotlight({
               AI generated
             </span>
           </div>
-        )}
-
-        {/* Canvas overlay — only shown when imageEditTab === 'canvas' and showImageEdit */}
-        {showImageEdit && imageEditTab === 'canvas' && (
-          <canvas
-            ref={canvasRef}
-            className="absolute inset-0 z-30"
-            style={{ cursor: 'crosshair', touchAction: 'none' }}
-            onMouseDown={onCanvasDown}
-            onMouseMove={onCanvasMove}
-            onMouseUp={onCanvasUp}
-            onMouseLeave={onCanvasUp}
-            onTouchStart={onCanvasTouchStart}
-            onTouchMove={onCanvasTouchMove}
-            onTouchEnd={onCanvasTouchEnd}
-          />
         )}
 
         {/* ── Analyzing spinner ── */}
@@ -1142,6 +979,22 @@ export function PhotoSpotlight({
           </div>
         )}
 
+        {/* ── Action failure banner — Enhance/Furnishing/Defurnish all clear
+              their busy overlay into this on failure instead of hanging silently. ── */}
+        {jobErrorMessage && !anyOverlayActive && (
+          <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-20 flex max-w-[88%] items-start gap-2 rounded-xl bg-black/85 border border-skip/50 px-3.5 py-2.5 shadow-lg backdrop-blur-sm">
+            <span className="mt-0.5 h-1.5 w-1.5 shrink-0 rounded-full bg-skip" />
+            <p className="text-xs font-medium text-white leading-snug">{jobErrorMessage}</p>
+            <button
+              onClick={() => setJobErrorMessage(null)}
+              className="shrink-0 text-white/50 hover:text-white transition-colors"
+              aria-label="Dismiss"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        )}
+
         {/* ── Needs attention badge ── */}
         {needsAttention && !isPending && !jobRunning && !anyOverlayActive && (
           <div className="absolute top-4 left-4 z-10">
@@ -1170,12 +1023,12 @@ export function PhotoSpotlight({
 
         {/* ── Photo counter + top-right action buttons ── */}
         <div className="absolute top-4 right-4 z-10 flex items-center gap-2">
-          {/* Enhance + Furniture/Defurnish buttons beside Edit Image */}
-          {hasRoomType && !needsAttention && !jobRunning && !jobHasImage && !isPending && !showImageEdit && !anyOverlayActive && (
+          {/* Enhance + Furniture/Defurnish buttons */}
+          {hasRoomType && !needsAttention && !jobRunning && !jobHasImage && !isPending && !anyOverlayActive && (
             <>
               <button
                 onClick={() => void handleEnhance()}
-                disabled={enhanceBusy || applyBusy || imageEditBusy}
+                disabled={enhanceBusy || applyBusy}
                 className="flex items-center gap-1 rounded-full bg-black/60 border border-white/25 px-2.5 py-1.5 text-[11px] font-semibold text-white hover:bg-white/20 backdrop-blur-sm transition-all shadow-md disabled:opacity-50"
               >
                 {enhanceBusy
@@ -1188,7 +1041,7 @@ export function PhotoSpotlight({
                 <div className="flex items-center rounded-full bg-black/60 border border-white/25 backdrop-blur-sm shadow-md overflow-hidden">
                   <button
                     onClick={() => handleFurnitureClick('furnish')}
-                    disabled={applyBusy || enhanceBusy || imageEditBusy}
+                    disabled={applyBusy || enhanceBusy}
                     className={`flex items-center gap-1 px-2.5 py-1.5 text-[11px] font-semibold transition-all disabled:opacity-50
                       ${furnitureMode === 'furnish' ? 'bg-white/90 text-black' : 'text-white hover:bg-white/15'}`}
                   >
@@ -1200,7 +1053,7 @@ export function PhotoSpotlight({
                   <span className="w-px self-stretch bg-white/20" />
                   <button
                     onClick={() => handleFurnitureClick('defurnish')}
-                    disabled={applyBusy || enhanceBusy || imageEditBusy}
+                    disabled={applyBusy || enhanceBusy}
                     className={`flex items-center gap-1 px-2.5 py-1.5 text-[11px] font-semibold transition-all disabled:opacity-50
                       ${furnitureMode === 'defurnish' ? 'bg-white/90 text-black' : 'text-white hover:bg-white/15'}`}
                   >
@@ -1225,23 +1078,6 @@ export function PhotoSpotlight({
                 )}
               </div>
             </>
-          )}
-          {/* TOP-RIGHT EDIT IMAGE BUTTON — always visible when analyzed, no active job */}
-          {hasRoomType && !needsAttention && !jobRunning && !isPending && !showImageEdit && (!furniturePickerBusy || jobHasImage) && !isEnhancing && !isDefurnishing && !imageRegenLoading && (
-            <button
-              onClick={() => {
-                setShowImageEdit(true);
-                setImageEditTab('objects');
-                setFeasibility(null);
-                setSelectedObjects([]);
-                setObjectPrompt('');
-              }}
-              className="flex items-center gap-1 rounded-full bg-black/60 border border-white/25 px-2.5 py-1.5 text-[11px] font-semibold text-white hover:bg-white/20 backdrop-blur-sm transition-all shadow-md"
-              title="Edit image — select objects or draw"
-            >
-              <Pencil className="h-3 w-3" />
-              Edit Image
-            </button>
           )}
           <span className="rounded-full bg-black/60 px-3 py-1.5 text-xs font-semibold text-white backdrop-blur-sm">
             {clampedIndex + 1} / {photos.length}
@@ -1388,173 +1224,6 @@ export function PhotoSpotlight({
           </div>
         )}
 
-
-        {/* 6 · IMAGE EDIT PANEL (object selection + canvas) — overlay on image */}
-        {showImageEdit && !needsAttention && !jobRunning && (
-          <div
-            className="absolute inset-0 z-40 flex flex-col"
-            style={{ background: imageEditTab === 'canvas' ? 'rgba(0,0,0,0.25)' : 'rgba(0,0,0,0.72)' }}
-          >
-            {/* Header */}
-            <div className="flex items-center justify-between px-4 pt-4 pb-2">
-              <p className="text-sm font-bold text-white">Edit Image</p>
-              <button
-                onClick={() => { setShowImageEdit(false); setFeasibility(null); }}
-                className="h-7 w-7 flex items-center justify-center rounded-full bg-white/10 text-white hover:bg-white/25 transition-colors"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-
-            {/* Tabs */}
-            <div className="flex gap-1 px-4 pb-2">
-              <button
-                onClick={() => setImageEditTab('objects')}
-                className={`flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-semibold transition-all
-                  ${imageEditTab === 'objects' ? 'bg-white text-black' : 'bg-white/15 text-white hover:bg-white/25'}`}
-              >
-                <List className="h-3 w-3" /> Select Objects
-              </button>
-              <button
-                onClick={() => setImageEditTab('canvas')}
-                className={`flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-semibold transition-all
-                  ${imageEditTab === 'canvas' ? 'bg-white text-black' : 'bg-white/15 text-white hover:bg-white/25'}`}
-              >
-                <Brush className="h-3 w-3" /> Draw to Select
-              </button>
-            </div>
-
-            {/* Objects tab */}
-            {imageEditTab === 'objects' && (
-              <div className="flex-1 overflow-y-auto px-4 pb-2">
-                <p className="text-[10px] text-white/50 mb-2">Tap items you want to change</p>
-                <div className="flex flex-wrap gap-1.5 mb-3">
-                  {detectedObjects.map(obj => {
-                    const selected = selectedObjects.includes(obj);
-                    return (
-                      <button
-                        key={obj}
-                        onClick={() => {
-                          setSelectedObjects(prev =>
-                            prev.includes(obj) ? prev.filter(o => o !== obj) : [...prev, obj]
-                          );
-                          setFeasibility(null);
-                        }}
-                        className={`rounded-full border px-2.5 py-1 text-xs font-medium transition-all
-                          ${selected
-                            ? 'border-yellow-400/80 bg-yellow-400/25 text-yellow-200'
-                            : 'border-white/25 bg-white/10 text-white/80 hover:bg-white/20'}`}
-                      >
-                        {obj}
-                        {selected && <span className="ml-1 text-yellow-300">✓</span>}
-                      </button>
-                    );
-                  })}
-                </div>
-
-                {selectedObjects.length > 0 && (
-                  <>
-                    <textarea
-                      value={objectPrompt}
-                      onChange={e => { setObjectPrompt(e.target.value); setFeasibility(null); }}
-                      placeholder={`What should replace ${selectedObjects.length === 1 ? selectedObjects[0] : 'these items'}? (e.g. modern marble countertop, white L-shaped sofa)`}
-                      className="w-full rounded-xl border border-white/20 bg-white/10 px-3 py-2 text-xs text-white placeholder:text-white/35 focus:outline-none focus:border-white/50 resize-none h-14"
-                    />
-                    <div className="flex items-center gap-2 mt-2">
-                      {feasibility === null && (
-                        <button
-                          disabled={!objectPrompt.trim()}
-                          onClick={() => void handleCheckFeasibility()}
-                          className="flex-1 rounded-xl bg-analysis px-3 py-2 text-xs font-semibold text-white disabled:opacity-40 hover:bg-analysis/85 transition-all"
-                        >
-                          Check &amp; Generate
-                        </button>
-                      )}
-                      {feasibility === 'checking' && (
-                        <div className="flex-1 rounded-xl bg-analysis/40 px-3 py-2 text-xs text-white/70 flex items-center gap-2">
-                          <span className="h-3 w-3 rounded-full border-2 border-white border-t-transparent animate-spin" />
-                          Checking feasibility…
-                        </div>
-                      )}
-                      {feasibility === 'ready' && (
-                        <div className="flex-1 flex flex-col gap-1.5">
-                          <div className="rounded-xl bg-approved/25 border border-approved/40 px-3 py-1.5 text-xs text-approved font-medium">
-                            ✓ This edit looks feasible — we'll generate a preview
-                          </div>
-                          <button
-                            disabled={imageEditBusy}
-                            onClick={() => void handleImageEditSubmit()}
-                            className="rounded-xl bg-analysis px-3 py-2 text-xs font-semibold text-white disabled:opacity-40 hover:bg-analysis/85 transition-all"
-                          >
-                            {imageEditBusy
-                              ? <span className="flex items-center justify-center gap-2"><span className="h-3 w-3 rounded-full border-2 border-white border-t-transparent animate-spin" />Generating…</span>
-                              : 'Generate Edit →'}
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                  </>
-                )}
-              </div>
-            )}
-
-            {/* Canvas tab */}
-            {imageEditTab === 'canvas' && (
-              <div className="flex-1 flex flex-col px-4 pb-2 pointer-events-none">
-                <p className="text-[10px] text-white/70 mb-1 pointer-events-auto">
-                  Draw on the image to highlight what you want to change
-                </p>
-                <div className="flex items-center gap-2 mb-2 pointer-events-auto">
-                  {canvasHasDrawing && (
-                    <button
-                      onClick={clearCanvas}
-                      className="rounded-full border border-white/30 bg-white/10 px-2.5 py-1 text-[10px] text-white hover:bg-white/20 transition-all"
-                    >
-                      Clear drawing
-                    </button>
-                  )}
-                  <span className="text-[10px] text-white/40 italic">Yellow brush active</span>
-                </div>
-                {/* Bottom prompt for canvas — pointer-events-auto to intercept */}
-                <div className="mt-auto pointer-events-auto">
-                  <textarea
-                    value={canvasPrompt}
-                    onChange={e => { setCanvasPrompt(e.target.value); setFeasibility(null); }}
-                    placeholder="Describe what you'd like to change in the highlighted area…"
-                    className="w-full rounded-xl border border-white/20 bg-black/60 px-3 py-2 text-xs text-white placeholder:text-white/35 focus:outline-none focus:border-white/50 resize-none h-12 backdrop-blur-sm"
-                  />
-                  <div className="flex gap-2 mt-2">
-                    {feasibility === null && (
-                      <button
-                        disabled={!canvasHasDrawing || !canvasPrompt.trim()}
-                        onClick={() => void handleCheckFeasibility()}
-                        className="flex-1 rounded-xl bg-analysis px-3 py-2 text-xs font-semibold text-white disabled:opacity-40 hover:bg-analysis/85 transition-all"
-                      >
-                        Check &amp; Generate
-                      </button>
-                    )}
-                    {feasibility === 'checking' && (
-                      <div className="flex-1 rounded-xl bg-analysis/40 px-3 py-2 text-xs text-white/70 flex items-center gap-2">
-                        <span className="h-3 w-3 rounded-full border-2 border-white border-t-transparent animate-spin" />
-                        Checking feasibility…
-                      </div>
-                    )}
-                    {feasibility === 'ready' && (
-                      <button
-                        disabled={imageEditBusy}
-                        onClick={() => void handleImageEditSubmit()}
-                        className="flex-1 rounded-xl bg-approved px-3 py-2 text-xs font-semibold text-white disabled:opacity-40 hover:bg-approved/85 transition-all"
-                      >
-                        {imageEditBusy ? '…' : '✓ Generate Edit'}
-                      </button>
-                    )}
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-
         {/* ── Prev / Next navigation ── */}
         {clampedIndex > 0 && (
           <button
@@ -1574,7 +1243,7 @@ export function PhotoSpotlight({
         )}
 
         {/* Click to open full carousel */}
-        {!needsAttention && !isPending && !jobHasImage && !jobRunning && !applyBusy && !showImageEdit && (
+        {!needsAttention && !isPending && !jobHasImage && !jobRunning && !applyBusy && (
           <button
             onClick={() => onSelectPhoto(photo._id)}
             className="absolute inset-0 cursor-zoom-in z-0"
@@ -1667,57 +1336,60 @@ export function PhotoSpotlight({
         </div>
       </div>
 
-      {/* ── Thumbnail strip. The upload button is the last flex item in this same
-            scroll container: with few photos (strip fits without scrolling) it just
-            sits inline right after the last thumb — but as soon as there are enough
-            photos to overflow, `sticky right-0` catches it and keeps it pinned at the
-            right edge of the visible strip the whole time, instead of only being
-            reachable by scrolling all the way to the true end. Photos stay scrollable
-            underneath/beside it, including via a plain mouse wheel while hovering. ── */}
-      <div
-        ref={thumbStripRef}
-        onWheel={handleThumbStripWheel}
-        className="flex gap-2 overflow-x-auto pb-1"
-        style={{ scrollbarWidth: 'thin', scrollbarColor: 'rgba(0,0,0,0.2) transparent' }}
-      >
-        {photos.map((p, i) => {
-          const thumbNeedsAttention =
-            p.status === 'analyzed' &&
-            (!p.analysis?.roomType || p.analysis?.emptyRoom || p.analysis?.suitable === false);
-          const thumbJob      = toolJobs?.find(j => j.sourceUrl === p.url);
-          const thumbJobReady = thumbJob?.status === 'ready_for_review';
-          return (
-            <button
-              key={p._id}
-              onClick={() => setSelectedPhotoId(p._id)}
-              style={{
-                width: 112, height: 80,
-                borderColor: i === clampedIndex ? 'var(--color-analysis, #0E7C7B)' : 'transparent',
-                opacity: i === clampedIndex ? 1 : 0.55,
-              }}
-              className="relative shrink-0 rounded-lg overflow-hidden border-2 transition-all hover:opacity-80"
-            >
-              <Image src={resolvePhotoUrl(p.url, p.imageUpdatedAt || p.updatedAt)} alt="" fill unoptimized className="object-cover" />
-              {p.status === 'pending' && (
-                <div className="absolute inset-0 flex items-center justify-center bg-black/40">
-                  <span className="h-3.5 w-3.5 rounded-full border-2 border-white border-t-transparent animate-spin" />
-                </div>
-              )}
-              {thumbJobReady && (
-                <div className="absolute top-1 right-1 h-2.5 w-2.5 rounded-full bg-approved" />
-              )}
-              {thumbNeedsAttention && !thumbJobReady && (
-                <div className="absolute bottom-1 right-1 h-2.5 w-2.5 rounded-full bg-gate animate-pulse" />
-              )}
-            </button>
-          );
-        })}
+      {/* ── Thumbnail strip. The photos live in their own shrink-to-fit scroll box;
+            the upload button is a separate flex sibling next to it, never inside the
+            same scrolling row. With few photos the scroll box is only as wide as its
+            content, so the button sits immediately adjacent — but once there are
+            enough photos to need the full available width, the scroll box (shrink,
+            not grow) yields space to the button and clips/scrolls internally instead.
+            This keeps the button in one fixed, non-overlapping slot at all times —
+            unlike `position: sticky`, photos never visibly slide under/behind it. ── */}
+      <div className="flex items-stretch gap-2">
+        <div
+          ref={thumbStripRef}
+          onScroll={handleThumbStripScroll}
+          className="flex min-w-0 shrink gap-2 overflow-x-auto pb-1"
+          style={{ scrollbarWidth: 'thin', scrollbarColor: 'rgba(0,0,0,0.2) transparent' }}
+        >
+          {photos.map((p, i) => {
+            const thumbNeedsAttention =
+              p.status === 'analyzed' &&
+              (!p.analysis?.roomType || p.analysis?.emptyRoom || p.analysis?.suitable === false);
+            const thumbJob      = toolJobs?.find(j => j.sourceUrl === p.url);
+            const thumbJobReady = thumbJob?.status === 'ready_for_review';
+            return (
+              <button
+                key={p._id}
+                onClick={() => setSelectedPhotoId(p._id)}
+                style={{
+                  width: 112, height: 80,
+                  borderColor: i === clampedIndex ? 'var(--color-analysis, #0E7C7B)' : 'transparent',
+                  opacity: i === clampedIndex ? 1 : 0.55,
+                }}
+                className="relative shrink-0 rounded-lg overflow-hidden border-2 transition-all hover:opacity-80"
+              >
+                <Image src={resolvePhotoUrl(p.url, p.imageUpdatedAt || p.updatedAt)} alt="" fill unoptimized className="object-cover" />
+                {p.status === 'pending' && (
+                  <div className="absolute inset-0 flex items-center justify-center bg-black/40">
+                    <span className="h-3.5 w-3.5 rounded-full border-2 border-white border-t-transparent animate-spin" />
+                  </div>
+                )}
+                {thumbJobReady && (
+                  <div className="absolute top-1 right-1 h-2.5 w-2.5 rounded-full bg-approved" />
+                )}
+                {thumbNeedsAttention && !thumbJobReady && (
+                  <div className="absolute bottom-1 right-1 h-2.5 w-2.5 rounded-full bg-gate animate-pulse" />
+                )}
+              </button>
+            );
+          })}
+        </div>
         {onUploadMore && (
           <button
             onClick={onUploadMore}
             disabled={uploadingCount != null}
             style={{ width: 112, height: 80 }}
-            className="sticky right-0 z-10 shrink-0 rounded-lg overflow-hidden border-2 border-dashed border-ink/25 bg-paper hover:border-analysis/60 hover:bg-analysis-soft/60 disabled:hover:border-ink/25 disabled:hover:bg-paper transition-all flex items-center justify-center text-ink/40 hover:text-analysis shadow-[-10px_0_10px_-6px_rgba(0,0,0,0.15)]"
+            className="shrink-0 rounded-lg overflow-hidden border-2 border-dashed border-ink/25 bg-paper hover:border-analysis/60 hover:bg-analysis-soft/60 disabled:hover:border-ink/25 disabled:hover:bg-paper transition-all flex items-center justify-center text-ink/40 hover:text-analysis"
             title={uploadingCount != null ? `Uploading ${uploadingCount}…` : 'Add more photos'}
           >
             {uploadingCount != null ? (
@@ -1732,100 +1404,6 @@ export function PhotoSpotlight({
         )}
       </div>
 
-      {/* ════════════════════════════════════════
-          YOUR THEME — color palette (below thumbnails)
-          ════════════════════════════════════════ */}
-      {hasRoomType && !needsAttention && !jobHasImage && (
-        <div className="rounded-2xl border border-hairline bg-surface p-4">
-          <div className="flex items-center justify-between mb-3">
-            <div>
-              <p className="text-sm font-bold text-ink">Your Theme</p>
-              <p className="text-xs text-ink/45 mt-0.5">
-                Pick up to 3 colors · AI uses these for every suggestion
-              </p>
-            </div>
-            {selectedColors.length > 0 && (
-              <button
-                onClick={() => setSelectedColors([])}
-                className="text-[10px] text-ink/40 hover:text-ink transition-colors"
-              >
-                Clear
-              </button>
-            )}
-          </div>
-
-          {/* Selected swatches preview */}
-          {selectedColors.length > 0 && (
-            <div className="flex items-center gap-2 mb-3 p-2 rounded-xl bg-analysis-soft">
-              <span className="text-[10px] text-analysis font-semibold">Active:</span>
-              {selectedColors.map(h => {
-                const c = COLOR_PALETTE.find(x => x.hex === h);
-                return (
-                  <span key={h} className="flex items-center gap-1 rounded-full bg-white/80 px-2 py-0.5 text-[10px] font-semibold text-ink/80 shadow-sm">
-                    <span className="h-2.5 w-2.5 rounded-full border border-black/10" style={{ backgroundColor: h }} />
-                    {c?.label ?? h}
-                  </span>
-                );
-              })}
-            </div>
-          )}
-
-          <div className="flex flex-wrap gap-2">
-            {COLOR_PALETTE.map(c => {
-              const selected = selectedColors.includes(c.hex);
-              return (
-                <button
-                  key={c.hex}
-                  onClick={() => toggleColor(c.hex)}
-                  className={`flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium transition-all
-                    ${selected
-                      ? 'border-analysis bg-analysis-soft text-analysis shadow-sm scale-105'
-                      : 'border-hairline text-ink/60 hover:border-analysis/40 hover:scale-105'}`}
-                >
-                  <span className="h-3 w-3 rounded-full border border-black/10 shrink-0" style={{ backgroundColor: c.hex }} />
-                  {c.label}
-                  {selected && <span className="text-[9px] font-bold text-analysis">✓</span>}
-                </button>
-              );
-            })}
-          </div>
-
-          {/* Custom hex input */}
-          <div className="mt-3 flex items-center gap-2">
-            <div className="flex items-center gap-2 rounded-xl border border-hairline bg-paper px-3 py-2 flex-1">
-              <span className="text-[10px] text-ink/40 font-mono">#</span>
-              <input
-                value={customColor}
-                onChange={e => setCustomColor(e.target.value.replace(/[^0-9a-fA-F]/g, '').slice(0, 6))}
-                onKeyDown={e => {
-                  if (e.key === 'Enter' && customColor.length === 6) {
-                    toggleColor(`#${customColor}`);
-                    setCustomColor('');
-                  }
-                }}
-                placeholder="custom hex"
-                maxLength={6}
-                className="flex-1 bg-transparent text-xs font-mono text-ink focus:outline-none placeholder:text-ink/30"
-              />
-              {customColor.length > 0 && (
-                <span
-                  className="h-4 w-4 rounded-full border border-black/10 shrink-0"
-                  style={{ backgroundColor: customColor.length === 6 ? `#${customColor}` : 'transparent' }}
-                />
-              )}
-            </div>
-            {customColor.length === 6 && (
-              <button
-                onClick={() => { toggleColor(`#${customColor}`); setCustomColor(''); }}
-                className="rounded-xl bg-analysis px-3 py-2 text-xs font-semibold text-white hover:bg-analysis/85 transition-all"
-              >
-                Add
-              </button>
-            )}
-          </div>
-        </div>
-      )}
     </div>
-
   );
 }
